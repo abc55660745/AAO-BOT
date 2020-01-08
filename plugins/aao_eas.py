@@ -13,6 +13,7 @@ import shutil
 import os
 import chmod
 import nonebot
+from exam import get_exam_state
 
 
 header = {
@@ -27,7 +28,7 @@ header = {
 count = 0
 
 
-def login(accent, password, session: CommandSession):  #传入账号，密码以及来自nonebot的session，返回其他函数所需要的cookie
+def login(accent, password, session: CommandSession):
     global count, header
     APP_ID = read('baidu_API', 'APP_ID')
     APP_KEY = read('baidu_API', 'APP_KEY')
@@ -43,7 +44,7 @@ def login(accent, password, session: CommandSession):  #传入账号，密码以
         yzm = client.basicAccurate(r.content, options)["words_result"]
         count = count + 1
     else:
-        session.send('服务器负载过大，将使用低精度验证码识别，敬请谅解')  #注意！这里使用了来自nonebot的session类，删除本句和参数中的session即可在其他程序中调用
+        session.send('服务器负载过大，将使用低精度验证码识别，敬请谅解')
         yzm = client.basicGeneral(r.content, options)["words_result"]
     with open('wb.png', 'wb') as code:
         code.write(r.content)
@@ -69,7 +70,7 @@ def login(accent, password, session: CommandSession):  #传入账号，密码以
         return session
 
 
-def get_exam(session):  #传入login所返回的cookie，返回一个包含所有考试信息的列表
+def get_exam(session):
     global header
     req = requests.get('http://aao-eas.nuaa.edu.cn/eams/examSearchForStd!examTable.action?allExamBatch=1',
                        headers=header, cookies=session)
@@ -81,14 +82,17 @@ def get_exam(session):  #传入login所返回的cookie，返回一个包含所�
     return exam
 
 
-def get_week(session):  #传入login所返回的cookie，返回当前周
+def get_week(session):
+    """
     global header
     r = requests.get('http://aao-eas.nuaa.edu.cn/eams/homeExt.action', headers=header, cookies=session)
     week = re.findall(r"<font size=\"4px\">(.*?)</font>", r.text)[0]
+    """
+    week = ''
     return week
 
 
-def get_course(session, week):  #传入login所返回的cookie，返回课表html文件内容 注意！该文件不能直接使用，请参考下面调用本函数时的方法对其中部分数据进行替换
+def get_course(session, week):
     global header
     r = requests.get('http://aao-eas.nuaa.edu.cn/eams/courseTableForStd.action', cookies=session, headers=header)
     id = r.text.replace('\n', '')
@@ -101,13 +105,14 @@ def get_course(session, week):  #传入login所返回的cookie，返回课表htm
         'project.id': '1',
         # 'ids': '106018',
         'ids': id,
+        'semester.id': '82'
     }
     r = requests.post('http://aao-eas.nuaa.edu.cn/eams/courseTableForStd!courseTable.action',
                       data=data, cookies=session, headers=header)
     return r.text
 
 
-def get_grade(session):  #传入login所返回的cookie，返回一个列表，包含生成的每科成绩信息
+def get_grade(session):
     global header
     r = requests.get('http://aao-eas.nuaa.edu.cn/eams/teach/grade/course/person!search.action?semesterId=62',
                      cookies=session, headers=header)
@@ -178,215 +183,225 @@ def get_grade(session):  #传入login所返回的cookie，返回一个列表，�
 
 @on_command('course', aliases=('课表', '查课表'))
 async def course(session: CommandSession):
-    accentlist = chmod.read_chmod()
-    http_path = read('server', 'http_path')
-    address = read('server', 'address')
-    if str(session.ctx['user_id']) in accentlist:
-        if accentlist[str(session.ctx['user_id'])] != '?':
-            accent = accentlist[str(session.ctx['user_id'])]
-            password = session.get('password', prompt='请输入密 码')
-            await session.send('请稍后，正在尝试连接教务系统')
-            cookie = login(accent, password, session)
-            if cookie == 1:
-                await session.send('验证码识别错误，请重试')
-            elif cookie == 0:
-                await session.send('密码错误，请重试')
-            elif cookie == 2:
-                await session.send('账号不存在，请尝试重新绑定账号')
+    exam_state = get_exam_state(str(session.ctx['user_id']))
+    if exam_state != 0:
+        accentlist = chmod.read_chmod()
+        http_path = read('server', 'http_path')
+        address = read('server', 'address')
+        if str(session.ctx['user_id']) in accentlist:
+            if accentlist[str(session.ctx['user_id'])] != '?':
+                accent = accentlist[str(session.ctx['user_id'])]
+                password = session.get('password', prompt='请输入密 码')
+                await session.send('请稍后，正在尝试连接教务系统')
+                cookie = login(accent, password, session)
+                if cookie == 1:
+                    await session.send('验证码识别错误，请重试')
+                elif cookie == 0:
+                    await session.send('密码错误，请重试')
+                elif cookie == 2:
+                    await session.send('账号不存在，请尝试重新绑定账号')
+                else:
+                    time.sleep(1)
+                    week = get_week(cookie)
+                    table = get_course(cookie, week)
+                    table = table.replace('/eams', 'http://aao-eas.nuaa.edu.cn/eams')
+                    with open(http_path + str(session.ctx['user_id']) + '.html', 'w', encoding='utf-8') as f:
+                        f.write(table)
+                        f.close()
+                    await session.send('点击网址查看课程表 http://' + address + '/' + str(session.ctx['user_id']) + '.html')
             else:
-                time.sleep(1)
-                week = get_week(cookie)
-                table = get_course(cookie, week)
-                table = table.replace('/eams', 'http://aao-eas.nuaa.edu.cn/eams')
-                with open(http_path + str(session.ctx['user_id']) + '.html', 'w', encoding='utf-8') as f:
-                    f.write(table)
-                    f.close()
-                await session.send('点击网址查看课程表 http://' + address + '/' + str(session.ctx['user_id']) + '.html')
+                await session.send('清先绑定账号')
         else:
-            await session.send('清先绑定账号')
-    else:
-        await session.send('您的账号权限不足')
+            await session.send('您的账号权限不足')
 
 
 @on_command('course_cal', aliases=('课表文件', '课表日历'))
 async def course_cal(session: CommandSession):
-    accentlist = chmod.read_chmod()
-    http_path = read('server', 'http_path')
-    address = read('server', 'address')
-    if str(session.ctx['user_id']) in accentlist:
-        if accentlist[str(session.ctx['user_id'])] != '?':
-            accent = accentlist[str(session.ctx['user_id'])]
-            password = session.get('password', prompt='请输入密 码')
-            await session.send('请稍后，正在尝试连接教务系统')
-            cookie = login(accent, password, session)
-            if cookie == 1:
-                await session.send('验证码识别错误，请重试')
-            elif cookie == 0:
-                await session.send('密码错误，请重试')
-            elif cookie == 2:
-                await session.send('账号不存在，请尝试重新绑定账号')
+    exam_state = get_exam_state(str(session.ctx['user_id']))
+    if exam_state != 0:
+        accentlist = chmod.read_chmod()
+        http_path = read('server', 'http_path')
+        address = read('server', 'address')
+        if str(session.ctx['user_id']) in accentlist:
+            if accentlist[str(session.ctx['user_id'])] != '?':
+                accent = accentlist[str(session.ctx['user_id'])]
+                password = session.get('password', prompt='请输入密 码')
+                await session.send('请稍后，正在尝试连接教务系统')
+                cookie = login(accent, password, session)
+                if cookie == 1:
+                    await session.send('验证码识别错误，请重试')
+                elif cookie == 0:
+                    await session.send('密码错误，请重试')
+                elif cookie == 2:
+                    await session.send('账号不存在，请尝试重新绑定账号')
+                else:
+                    time.sleep(1)
+                    table = get_course(cookie, '')
+                    lessons = parseCourseTable(table)
+                    semester_start_date = datetime(2019, 9, 2, 0, 0, 0,
+                                                   tzinfo=timezone('Asia/Shanghai'))
+                    cal = create_ics(lessons, semester_start_date)
+                    export_ics(cal, str(session.ctx['user_id']))
+                    filename = 'NUAAiCal-Data/' + str(session.ctx['user_id']) + '.ics'
+                    shutil.copyfile(os.path.abspath(filename), http_path + str(session.ctx['user_id']) + '.ics')
+                    await session.send('点击网址下载日历文件 http://' + address + '/' + str(session.ctx['user_id']) + '.ics')
+                    await session.send('本日历模块来自miaotony的github开源项目，感谢他对开源社区做出的贡献')
             else:
-                time.sleep(1)
-                table = get_course(cookie, '')
-                lessons = parseCourseTable(table)
-                semester_start_date = datetime(2019, 9, 2, 0, 0, 0,
-                                               tzinfo=timezone('Asia/Shanghai'))
-                cal = create_ics(lessons, semester_start_date)
-                export_ics(cal, str(session.ctx['user_id']))
-                filename = 'NUAAiCal-Data/' + str(session.ctx['user_id']) + '.ics'
-                shutil.copyfile(os.path.abspath(filename), http_path + str(session.ctx['user_id']) + '.ics')
-                await session.send('点击网址下载日历文件 http://' + address + '/' + str(session.ctx['user_id']) + '.ics')
-                await session.send('本日历模块来自miaotony的github开源项目，感谢他对开源社区做出的贡献')
+                await session.send('清先绑定账号')
         else:
-            await session.send('清先绑定账号')
-    else:
-        await session.send('您的账号权限不足')
+            await session.send('您的账号权限不足')
 
 
 @on_command('exam', aliases=('考试查询', '查考试'))
 async def exam(session: CommandSession):
-    accentlist = chmod.read_chmod()
-    if accentlist[str(session.ctx['user_id'])] != '?':
-        if str(session.ctx['user_id']) in accentlist:
-            accent = accentlist[str(session.ctx['user_id'])]
-            password = session.get('password', prompt='请输入密 码')
-            await session.send('请稍后，正在尝试连接教务系统')
-            cookie = login(accent, password, session)
-            if cookie == 1:
-                await session.send('验证码识别错误，请重试')
-            elif cookie == 0:
-                await session.send('密码错误，请重试')
-            elif cookie == 2:
-                await session.send('账号不存在，请尝试重新绑定账号')
-            else:
-                time.sleep(1)
-                exam = get_exam(cookie)
-                i = 0
-                flag = 0
-                text = ''
-                timet = ''
-                for project in exam:
-                    if project != '':
-                        if i == 0:
-                            text += '课程编号：' + project + '\n'
-                        elif i == 1:
-                            text += '课程名称：' + project + '\n'
-                        elif i == 2:
-                            text += '考试类型：' + project + '\n'
-                        elif i == 3:
-                            text += '考试日期：' + project + '\n'
-                            if project.find('未安排', 0, len(project)) == -1:
-                                timet += project + ' '
-                        elif i == 4:
-                            text += '考试时间：' + project + '\n'
-                            if project.find('未安排', 0, len(project)) == -1:
-                                timet += project.split('~')[1] + ':00'
-                        elif i == 5:
-                            text += '考试地点：' + project + '\n'
-                        elif i == 6:
-                            text += '考试座位：' + project + '\n'
-                        elif i == 7:
-                            text += '考试状态：' + project + '\n'
-                        i = i + 1
-                    else:
-                        i = 0
-                        text = text.replace('<fontcolor="BBC4C3">', '')
-                        text = text.replace('</font>', '')
-                        if timet == '':
-                            await session.send(text[:-1])
+    exam_state = get_exam_state(str(session.ctx['user_id']))
+    if exam_state != 0:
+        accentlist = chmod.read_chmod()
+        if accentlist[str(session.ctx['user_id'])] != '?':
+            if str(session.ctx['user_id']) in accentlist:
+                accent = accentlist[str(session.ctx['user_id'])]
+                password = session.get('password', prompt='请输入密 码')
+                await session.send('请稍后，正在尝试连接教务系统')
+                cookie = login(accent, password, session)
+                if cookie == 1:
+                    await session.send('验证码识别错误，请重试')
+                elif cookie == 0:
+                    await session.send('密码错误，请重试')
+                elif cookie == 2:
+                    await session.send('账号不存在，请尝试重新绑定账号')
+                else:
+                    time.sleep(1)
+                    exam = get_exam(cookie)
+                    i = 0
+                    flag = 0
+                    text = ''
+                    timet = ''
+                    for project in exam:
+                        if project != '':
+                            if i == 0:
+                                text += '课程编号：' + project + '\n'
+                            elif i == 1:
+                                text += '课程名称：' + project + '\n'
+                            elif i == 2:
+                                text += '考试类型：' + project + '\n'
+                            elif i == 3:
+                                text += '考试日期：' + project + '\n'
+                                if project.find('未安排', 0, len(project)) == -1:
+                                    timet += project + ' '
+                            elif i == 4:
+                                text += '考试时间：' + project + '\n'
+                                if project.find('未安排', 0, len(project)) == -1:
+                                    timet += project.split('~')[1] + ':00'
+                            elif i == 5:
+                                text += '考试地点：' + project + '\n'
+                            elif i == 6:
+                                text += '考试座位：' + project + '\n'
+                            elif i == 7:
+                                text += '考试状态：' + project + '\n'
+                            i = i + 1
                         else:
-                            timet = time.mktime(time.strptime(timet, "%Y-%m-%d %H:%M:%S"))
-                            timen = time.time()
-                            if timen <= timet:
+                            i = 0
+                            text = text.replace('<fontcolor="BBC4C3">', '')
+                            text = text.replace('</font>', '')
+                            if timet == '':
                                 await session.send(text[:-1])
                             else:
-                                flag = 1
-                        text = ''
-                        timet = ''
-                if flag == 1:
-                    await session.send('有部分过去的考试被隐藏，若需查看请使用“查询全部考试”指令查询')
+                                timet = time.mktime(time.strptime(timet, "%Y-%m-%d %H:%M:%S"))
+                                timen = time.time()
+                                if timen <= timet:
+                                    await session.send(text[:-1])
+                                else:
+                                    flag = 1
+                            text = ''
+                            timet = ''
+                    if flag == 1:
+                        await session.send('有部分过去的考试被隐藏，若需查看请使用“查询全部考试”指令查询')
+            else:
+                await session.send('清先绑定账号')
         else:
-            await session.send('清先绑定账号')
-    else:
-        await session.send('您的账号权限不足')
+            await session.send('您的账号权限不足')
 
 
 @on_command('examn', aliases=('全部考试', '查询全部考试'))
 async def examn(session: CommandSession):
-    accentlist = chmod.read_chmod()
-    if accentlist[str(session.ctx['user_id'])] != '?':
-        if str(session.ctx['user_id']) in accentlist:
-            accent = accentlist[str(session.ctx['user_id'])]
-            password = session.get('password', prompt='请输入密 码')
-            await session.send('请稍后，正在尝试连接教务系统')
-            cookie = login(accent, password, session)
-            if cookie == 1:
-                await session.send('验证码识别错误，请重试')
-            elif cookie == 0:
-                await session.send('密码错误，请重试')
-            elif cookie == 2:
-                await session.send('账号不存在，请尝试重新绑定账号')
+    exam_state = get_exam_state(str(session.ctx['user_id']))
+    if exam_state != 0:
+        accentlist = chmod.read_chmod()
+        if accentlist[str(session.ctx['user_id'])] != '?':
+            if str(session.ctx['user_id']) in accentlist:
+                accent = accentlist[str(session.ctx['user_id'])]
+                password = session.get('password', prompt='请输入密 码')
+                await session.send('请稍后，正在尝试连接教务系统')
+                cookie = login(accent, password, session)
+                if cookie == 1:
+                    await session.send('验证码识别错误，请重试')
+                elif cookie == 0:
+                    await session.send('密码错误，请重试')
+                elif cookie == 2:
+                    await session.send('账号不存在，请尝试重新绑定账号')
+                else:
+                    time.sleep(1)
+                    exam = get_exam(cookie)
+                    i = 0
+                    text = ''
+                    for project in exam:
+                        if project != '':
+                            if i == 0:
+                                text += '课程编号：' + project + '\n'
+                            elif i == 1:
+                                text += '课程名称：' + project + '\n'
+                            elif i == 2:
+                                text += '考试类型：' + project + '\n'
+                            elif i == 3:
+                                text += '考试日期：' + project + '\n'
+                            elif i == 4:
+                                text += '考试时间：' + project + '\n'
+                            elif i == 5:
+                                text += '考试地点：' + project + '\n'
+                            elif i == 6:
+                                text += '考试座位：' + project + '\n'
+                            elif i == 7:
+                                text += '考试状态：' + project + '\n'
+                            i = i + 1
+                        else:
+                            i = 0
+                            text = text.replace('<fontcolor="BBC4C3">', '')
+                            text = text.replace('</font>', '')
+                            await session.send(text[:-1])
+                            text = ''
             else:
-                time.sleep(1)
-                exam = get_exam(cookie)
-                i = 0
-                text = ''
-                for project in exam:
-                    if project != '':
-                        if i == 0:
-                            text += '课程编号：' + project + '\n'
-                        elif i == 1:
-                            text += '课程名称：' + project + '\n'
-                        elif i == 2:
-                            text += '考试类型：' + project + '\n'
-                        elif i == 3:
-                            text += '考试日期：' + project + '\n'
-                        elif i == 4:
-                            text += '考试时间：' + project + '\n'
-                        elif i == 5:
-                            text += '考试地点：' + project + '\n'
-                        elif i == 6:
-                            text += '考试座位：' + project + '\n'
-                        elif i == 7:
-                            text += '考试状态：' + project + '\n'
-                        i = i + 1
-                    else:
-                        i = 0
-                        text = text.replace('<fontcolor="BBC4C3">', '')
-                        text = text.replace('</font>', '')
-                        await session.send(text[:-1])
-                        text = ''
+                await session.send('清先绑定账号')
         else:
-            await session.send('清先绑定账号')
-    else:
-        await session.send('您的账号权限不足')
+            await session.send('您的账号权限不足')
 
 
 @on_command('grade', aliases=('成绩查询', '查成绩'))
 async def grade(session: CommandSession):
-    await session.send('此功能仍在测试状态，可能出现各种bug，如果遭遇bug请使用“反馈”指令通知管理员')
-    accentlist = chmod.read_chmod()
-    if accentlist[str(session.ctx['user_id'])] != '?':
-        if str(session.ctx['user_id']) in accentlist:
-            accent = accentlist[str(session.ctx['user_id'])]
-            password = session.get('password', prompt='请输入密 码')
-            await session.send('请稍后，正在尝试连接教务系统')
-            cookie = login(accent, password, session)
-            if cookie == 1:
-                await session.send('验证码识别错误，请重试')
-            elif cookie == 0:
-                await session.send('密码错误，请重试')
-            elif cookie == 2:
-                await session.send('账号不存在，请尝试重新绑定账号')
+    exam_state = get_exam_state(str(session.ctx['user_id']))
+    if exam_state != 0:
+        await session.send('此功能仍在测试状态，可能出现各种bug，如果遭遇bug请使用“反馈”指令通知管理员')
+        accentlist = chmod.read_chmod()
+        if accentlist[str(session.ctx['user_id'])] != '?':
+            if str(session.ctx['user_id']) in accentlist:
+                accent = accentlist[str(session.ctx['user_id'])]
+                password = session.get('password', prompt='请输入密 码')
+                await session.send('请稍后，正在尝试连接教务系统')
+                cookie = login(accent, password, session)
+                if cookie == 1:
+                    await session.send('验证码识别错误，请重试')
+                elif cookie == 0:
+                    await session.send('密码错误，请重试')
+                elif cookie == 2:
+                    await session.send('账号不存在，请尝试重新绑定账号')
+                else:
+                    time.sleep(1)
+                    result = get_grade(cookie)
+                    for coursein in result:
+                        await session.send(coursein[:-1])
             else:
-                time.sleep(1)
-                result = get_grade(cookie)
-                for coursein in result:
-                    await session.send(coursein[:-1])
+                await session.send('清先绑定账号')
         else:
-            await session.send('清先绑定账号')
-    else:
-        await session.send('您的账号权限不足')
+            await session.send('您的账号权限不足')
 
 
 @nonebot.scheduler.scheduled_job('cron', hour='0')
